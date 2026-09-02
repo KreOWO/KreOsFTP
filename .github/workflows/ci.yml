@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Typecheck, translations, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      # A missing catalog entry is silent at runtime — the UI just shows
+      # Russian — so the only way to keep the translation honest is to fail
+      # the build on it.
+      - name: Translations
+        run: npm run i18n:check
+
+      - name: Build
+        run: npm run build

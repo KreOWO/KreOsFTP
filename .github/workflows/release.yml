@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not deny the others a release.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            script: dist
+          - os: macos-latest
+            label: macOS
+            script: dist:mac
+          - os: ubuntu-latest
+            label: Linux
+            script: dist:linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Package
+        run: npm run ${{ matrix.script }}
+        env:
+          # Builds are intentionally unsigned. Without this electron-builder
+          # hunts for a keychain identity on macOS and fails the job instead of
+          # producing the unsigned artifact we actually want.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only the things a person downloads. `release/` also holds unpacked
+      # trees, blockmaps and update manifests, none of which belong in a
+      # release page.
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist-out
+          find release -maxdepth 1 -type f \
+            \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' \
+               -o -name '*.deb' -o -name '*.zip' -o -name '*.tar.gz' \) \
+            -exec cp {} dist-out/ \;
+          ls -la dist-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: dist-out/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Checksums are generated in one place with one tool, so the file is
+      # consistent across platforms rather than three dialects of the same idea.
+      - name: Flatten and checksum
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          echo "--- release contents ---"
+          cat SHA256SUMS.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          NOTES=$(cat <<'EOF'
+          Builds are **unsigned**: Windows SmartScreen and macOS Gatekeeper will
+          warn on first launch. Verify your download against `SHA256SUMS.txt`
+          before running it, or build from source — it takes two commands.
+
+          ```
+          sha256sum -c SHA256SUMS.txt --ignore-missing
+          ```
+          EOF
+          )
+          gh release create "$TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            --verify-tag || \
+          gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber

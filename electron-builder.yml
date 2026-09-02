@@ -1,0 +1,92 @@
+appId: dev.kreos.ftp
+productName: KreOsFTP
+copyright: MIT licensed
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+
+# ssh2 loads optional native helpers at runtime; they must stay real files
+# rather than being packed into the asar archive.
+asarUnpack:
+  - node_modules/ssh2/**
+  - node_modules/cpu-features/**
+
+# ── Windows ──────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  deleteAppDataOnUninstall: false
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Unsigned builds still run after the user allows them in Settings → Privacy.
+  # Set CSC_LINK / CSC_KEY_PASSWORD in CI to produce signed artifacts instead.
+  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# ── Linux ────────────────────────────────────────────────────────────────────
+linux:
+  category: Development
+  synopsis: FTP / FTPS / SFTP client with a built-in SSH terminal
+  description: >-
+    Two-pane file manager for FTP, FTPS and SFTP with an SSH terminal in the
+    same window, a transfer queue, directory sync and OS-encrypted credentials.
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64]
+    - target: tar.gz
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  desktop:
+    entry:
+      Name: KreOsFTP
+      Comment: FTP / FTPS / SFTP client with a built-in SSH terminal
+      Keywords: ftp;sftp;ssh;file transfer;
+
+deb:
+  # libsecret backs Electron's safeStorage on Linux; without it passwords
+  # cannot be encrypted and the app refuses to persist them at all.
+  depends:
+    - libsecret-1-0
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils

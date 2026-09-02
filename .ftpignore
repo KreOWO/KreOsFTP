@@ -1,0 +1,10 @@
+# Не отправлять зависимости, локальные сборки и служебные файлы проекта.
+node_modules/
+out/
+release/
+.git/
+.vite/
+*.log
+*.tsbuildinfo
+dev/ftp-root/
+
