@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { t } from '../../shared/i18n'
 import type { ReactElement } from 'react'
 import type { LogLine, TransferItem, TransferStatus } from '@shared/types'
@@ -19,6 +19,9 @@ interface DockProps {
   onResize: (height: number) => void
 }
 
+const DOCK_TABS = ['active', 'history', 'log'] as const
+type DockTab = (typeof DOCK_TABS)[number]
+
 function PreparationRow({ direction }: { direction: 'upload' | 'download' }): ReactElement {
   const upload = direction === 'upload'
   return (
@@ -33,7 +36,7 @@ function PreparationRow({ direction }: { direction: 'upload' | 'download' }): Re
           {t('Чтение .ftpignore, обход каталогов и сравнение размеров')}
         </span>
       </span>
-      <span>
+      <span className="transfer__progress">
         <div className="progress">
           <div className="progress__fill progress__fill--indeterminate" />
         </div>
@@ -98,7 +101,7 @@ function TransferRow({
             }}
           />
         </div>
-        <span className="transfer__num" style={{ display: 'block', marginTop: 3, textAlign: 'left' }}>
+        <span className="transfer__num">
           {formatSize(item.transferred)}
           {item.size !== null ? ` / ${formatSize(item.size)}` : ''}
         </span>
@@ -153,7 +156,7 @@ export function Dock(props: DockProps): ReactElement {
     height,
     onResize
   } = props
-  const [tab, setTab] = useState<'active' | 'history' | 'log'>('active')
+  const [tab, setTab] = useState<DockTab>('active')
   const logRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
@@ -170,6 +173,32 @@ export function Dock(props: DockProps): ReactElement {
   useLayoutEffect(() => {
     if (preparingSync) setTab('active')
   }, [preparingSync])
+
+  useEffect(() => {
+    const switchTab = (event: KeyboardEvent): void => {
+      if (
+        event.repeat ||
+        !event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        event.metaKey ||
+        (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+      ) {
+        return
+      }
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      event.preventDefault()
+      event.stopPropagation()
+      const direction = event.key === 'ArrowRight' ? 1 : -1
+      setTab((current) => {
+        const index = DOCK_TABS.indexOf(current)
+        return DOCK_TABS[(index + direction + DOCK_TABS.length) % DOCK_TABS.length]
+      })
+    }
+    window.addEventListener('keydown', switchTab, true)
+    return () => window.removeEventListener('keydown', switchTab, true)
+  }, [])
 
   const visibleLogs = useMemo(
     () => (sessionFilter ? logs.filter((l) => l.sessionId === sessionFilter || l.sessionId === null) : logs),
@@ -227,6 +256,7 @@ export function Dock(props: DockProps): ReactElement {
         <button
           className={'dock__tab' + (tab === 'active' ? ' dock__tab--active' : '')}
           onClick={() => setTab('active')}
+          title={t('Переключать вкладки: Ctrl+← / Ctrl+→')}
         >
           
           {t('В работе')}
@@ -239,6 +269,7 @@ export function Dock(props: DockProps): ReactElement {
         <button
           className={'dock__tab' + (tab === 'history' ? ' dock__tab--active' : '')}
           onClick={() => setTab('history')}
+          title={t('Переключать вкладки: Ctrl+← / Ctrl+→')}
         >
           
           {t('История')}
@@ -249,6 +280,7 @@ export function Dock(props: DockProps): ReactElement {
         <button
           className={'dock__tab' + (tab === 'log' ? ' dock__tab--active' : '')}
           onClick={() => setTab('log')}
+          title={t('Переключать вкладки: Ctrl+← / Ctrl+→')}
         >
           
           {t('Журнал')}

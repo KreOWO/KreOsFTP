@@ -8,7 +8,7 @@ Stop alternating between a file transfer app and a separate terminal.
 Move files on the left, run commands on the right, in one place.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3d7dd6.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6c7a89.svg)](#install)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-6c7a89.svg)](#install)
 [![Built with Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://electronjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg)](https://www.typescriptlang.org)
 
@@ -50,22 +50,42 @@ KreOsFTP is the combination as open source, on all three platforms:
 - Parallel transfers, each on its own connection
 - Resume interrupted downloads and uploads from the byte where they stopped
 - Overwrite rules: ask, always, skip, resume, or conditional on size and date
+- Three resizable columns in both panes: name, size and modification date
+- Open the local directory in the system file manager or a terminal
 
 **Terminal**
 - SSH terminal inside the server panel, on the same credentials as the transfer session
-- Quick commands saved per server, reorderable
+- Quick commands saved per server; add, edit or remove them from the terminal bar
 - Copy and paste, resizable, survives panel layout changes
+- A horizontally scrollable command strip whose copy/paste controls remain visible
 
 **Sync**
 - Preview before anything moves: what is queued, unchanged, and excluded
 - `.ftpignore` support, read from either side
-- Compares by presence, type and size; never deletes at the destination
+- Breadth-first comparison by presence, type and size, without downloading remote
+  files for hashes; never deletes at the destination
+- Hover a sync button to highlight included entries first and confirmed changes
+  as the comparison progresses
+- Styled confirmation before updating either side
+
+**Automation**
+- Configurable global shortcuts for reconnect, SSH, both sync directions and disconnect
+- Macros made from connect, upload/download update, SSH command and disconnect steps
+- A macro may have its own shortcut; conflicts are marked directly in the editor
+- Every macro step runs strictly in order, appears as a notification and is written
+  to the log
+- Consecutive SSH steps share one shell, so `cd`, exported variables and activated
+  environments carry over to the next command
 
 **Everyday**
 - Interface in English and Russian
 - Dark and light themes, following the system by default
 - Live protocol log — every command and reply, with passwords masked
-- Keyboard-first navigation
+- Settings split into General, Transfers, Shortcuts and Macros
+- The last closed connection stays available for one-click reconnect and survives restarts
+- Compact layouts remain usable in narrow windows
+- Repository branch, commit and working-tree state are visible from the app
+- Instant styled tooltips, including assigned shortcuts
 
 ---
 
@@ -113,19 +133,14 @@ so a rule that is too broad is visible rather than silent.
 
 <table>
 <tr>
-<td width="50%">
+<td>
 <img src="docs/screenshot-conflict.png" alt="Name conflict dialog" width="100%"><br>
 <b>Name conflicts.</b> Size and date of both sides, so the choice is informed.
 “Resume” greys out when the sizes already match.
 </td>
-<td width="50%">
-<img src="docs/screenshot-settings.png" alt="Settings" width="100%"><br>
-<b>Settings.</b> Interface language, theme, and what to do when a file already
-exists — including the conditional rules.
-</td>
 </tr>
 <tr>
-<td colspan="2">
+<td>
 <img src="docs/screenshot-light.png" alt="Light theme" width="100%"><br>
 <b>Light theme.</b> Both themes are first-class; the default follows the system.
 </td>
@@ -133,6 +148,18 @@ exists — including the conditional rules.
 </table>
 
 ---
+
+## Android
+
+The open-source mobile port lives in [`android`](android/README.md). Open that
+folder directly in Android Studio or build it with the included Gradle wrapper.
+It supports FTP, explicit FTPS, SFTP, an interactive SSH PTY terminal with
+bindable hotkeys, two file panes, parallel transfers and size-based
+`.ftpignore` synchronization.
+
+Android-specific build, signing and security notes are documented in
+[`android/README.md`](android/README.md) and
+[`android/SECURITY.md`](android/SECURITY.md).
 
 ## Install
 
@@ -213,6 +240,13 @@ what happens to them.
   connection with an explicit warning instead of a silent reconnect.
 - **Secrets never reach the renderer.** It only ever learns whether a password
   exists, never its value.
+- **Profiles, quick commands, shortcuts and macros are local application data.**
+  They live in Electron's user-data `sites.json`, outside the repository. The
+  repository ignores `sites.json` at every depth, along with `.env` files,
+  private keys and private release keystores.
+- **Macro and quick-command text is not encrypted.** Do not put passwords or
+  tokens directly in a command; use server-side environment files or a secret
+  manager instead.
 - **`PASS` is masked in the log.**
 - The renderer runs with `contextIsolation: true`, `nodeIntegration: false` and a
   strict Content-Security-Policy.
@@ -231,8 +265,8 @@ src/
 │   ├── session.ts        live connections + a per-session mutex
 │   ├── queue.ts          transfer queue, resume, conflict rules
 │   ├── sync.ts           directory comparison and .ftpignore
-│   ├── store.ts          profiles, OS-encrypted secrets
-│   ├── ssh-terminal.ts   interactive shell channels
+│   ├── store.ts          profiles, settings, macros, OS-encrypted secrets
+│   ├── ssh-terminal.ts   interactive terminal + serial macro shell
 │   └── protocols/        one file per protocol behind a shared interface
 ├── preload/      contextBridge → window.kreos
 └── renderer/     React + TypeScript
@@ -268,6 +302,17 @@ and the preload turns that back into an `Error`.
 | `Ctrl+A` | select all |
 | `Ctrl`+click | add to selection |
 | `Shift`+click | select a range |
+| `Ctrl+←` / `Ctrl+→` | switch Active / History / Log |
+| `Ctrl+Shift+L` | connect to the last server |
+| `Ctrl+Shift+T` | open or close SSH |
+| `Ctrl+Shift+U` | update the server, with confirmation |
+| `Ctrl+Shift+D` | update locally, with confirmation |
+| `Ctrl+Shift+X` | disconnect |
+
+The five application shortcuts are defaults, not hard-coded rules. Click a
+shortcut field under **Settings → Shortcuts**, then hold modifiers and press the
+final key. A conflicting assignment turns red and identifies its current owner.
+Macro shortcuts are configured in the same way.
 
 ---
 
@@ -280,9 +325,12 @@ These are honest consequences of the underlying libraries, not oversights.
 - **Cancelling a running transfer takes effect after the current file.** Neither
   `basic-ftp` nor `ssh2` can abort mid-file without tearing down the connection.
   Queued files cancel instantly.
-- **The permissions column is empty on many FTP servers.** Modern servers answer
-  listings with `MLSD`, whose required facts are only type, size and date. A dash
-  is shown rather than a fabricated value. SFTP always reports permissions.
+- **Version sync intentionally compares sizes, not file hashes.** Equal-size
+  edits are treated as unchanged so a remote preview never has to download every
+  file. Use a normal transfer when byte-for-byte verification is required.
+- **Macro SSH commands are non-interactive.** Commands that require a prompt
+  should be changed to a non-interactive form; the built-in terminal remains
+  available for interactive work.
 
 ---
 
@@ -293,6 +341,7 @@ Issues and pull requests are welcome. Before opening a PR:
 ```bash
 npm run typecheck
 npm run i18n:check
+npm run build
 ```
 
 `i18n:check` compares every string passed to `t()` against the English catalog

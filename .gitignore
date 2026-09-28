@@ -8,3 +8,24 @@ release/
 *.tsbuildinfo
 dev/ftp-root/
 dev/demo-local/
+
+# Личные профили подключений и локальные настройки клиента.
+# Рабочий sites.json хранится Electron вне репозитория, но это правило
+# защищает от его случайного копирования внутрь проекта.
+sites.json
+**/sites.json
+.env
+.env.*
+!.env.example
+local.properties
+keystore.local.properties
+
+# Приватные ключи и release-keystore. Единственное исключение — специально
+# опубликованный community-ключ для воспроизводимой open-source сборки Android.
+*.pem
+*.key
+*.ppk
+*.jks
+*.keystore
+*.p12
+!android/signing/community-release.p12

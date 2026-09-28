@@ -960,7 +960,7 @@ textarea {
   font-weight: 600;
   color: var(--text-dim);
   text-align: left;
-  padding: 5px 8px;
+  padding: 5px 12px;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -978,15 +978,18 @@ textarea {
 .filetable__resize::after {
   content: '';
   position: absolute;
-  top: 4px;
-  right: 3px;
-  bottom: 4px;
+  top: 3px;
+  right: 4px;
+  bottom: 3px;
   width: 1px;
-  background: transparent;
+  /* Видна всегда: иначе границу столбца приходится искать курсором. */
+  background: var(--border-strong);
+  transition: background 120ms ease, box-shadow 120ms ease;
 }
 .filetable__resize:hover::after,
 .is-resizing-file-column .filetable__resize::after {
   background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 .is-resizing-file-column {
   cursor: col-resize !important;
@@ -999,7 +1002,7 @@ textarea {
   text-align: right;
 }
 .filetable td {
-  padding: 0 8px;
+  padding: 0 12px;
   height: var(--row-h);
   border-bottom: 1px solid transparent;
   overflow: hidden;
@@ -1074,6 +1077,10 @@ textarea {
 }
 .row--dir .row__icon {
   color: var(--accent);
+}
+/* Folder blue is the normal state, but a confirmed sync result must win. */
+.row--dir.row--sync-preview .row__icon {
+  color: color-mix(in srgb, var(--success) 88%, var(--text-dim));
 }
 .row__text {
   overflow: hidden;
@@ -1345,7 +1352,7 @@ textarea {
 
 .transfer {
   display: grid;
-  grid-template-columns: 18px 1fr 130px 88px 80px 28px;
+  grid-template-columns: 18px 1fr 170px 88px 80px 28px;
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
@@ -1394,6 +1401,16 @@ textarea {
   font-size: 11px;
   color: var(--text-dim);
   text-align: right;
+}
+.transfer__progress {
+  display: grid;
+  grid-template-columns: minmax(48px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.transfer__progress .transfer__num {
+  white-space: nowrap;
 }
 
 .progress {
@@ -1527,6 +1544,65 @@ textarea {
 .modal--wide {
   width: min(640px, 100%);
 }
+.modal--settings {
+  width: min(860px, 100%);
+  height: min(760px, calc(100dvh - 48px));
+  min-height: 0;
+  overflow: hidden;
+}
+.modal--settings .modal__body {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.modal--settings .modal__head,
+.modal--settings .modal__foot {
+  flex: none;
+}
+.modal--settings .modal__head {
+  padding-bottom: 0;
+}
+.settings-tabs {
+  display: flex;
+  gap: 3px;
+  margin: 10px -18px 0;
+  padding: 0 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+.settings-tabs__button {
+  flex: none;
+  padding: 7px 10px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.settings-tabs__button:hover {
+  color: var(--text);
+}
+.settings-tabs__button--active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: 650;
+}
+.settings-page {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+}
+.settings-page h3 {
+  margin: 0;
+  font-size: 13px;
+}
 .modal--sync-confirm {
   width: min(520px, 100%);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
@@ -1627,6 +1703,182 @@ textarea {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text-dim);
+}
+
+.settings-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.settings-section h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.settings-section__head,
+.macro-card__head,
+.macro-card__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-section__head {
+  justify-content: space-between;
+}
+.hotkey-list {
+  display: grid;
+  gap: 6px;
+}
+.hotkey-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 190px;
+  align-items: center;
+  gap: 12px;
+}
+.hotkey-input {
+  cursor: pointer;
+  text-align: center;
+}
+.hotkey-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.hotkey-control .hotkey-input {
+  width: 100%;
+}
+.hotkey-control--conflict .hotkey-input {
+  padding-right: 32px;
+  border-color: var(--danger);
+  color: var(--danger);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 42%, transparent);
+}
+.hotkey-control__warning {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  width: 17px;
+  height: 16px;
+  padding-top: 3px;
+  color: #fff;
+  background: var(--danger);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  font: 800 10px/1 var(--sans);
+  text-align: center;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.macro-card {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+.macro-card__head .input:first-child {
+  flex: 1 1 180px;
+}
+.macro-card__head .hotkey-control {
+  flex: 0 1 180px;
+}
+.macro-steps {
+  display: grid;
+  gap: 5px;
+}
+.macro-step {
+  display: grid;
+  grid-template-columns: 22px minmax(130px, 0.45fr) minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+.macro-step__number {
+  color: var(--text-faint);
+  font: 11px var(--mono);
+  text-align: center;
+}
+.macro-step__actions {
+  display: flex;
+}
+.macro-card__add .select {
+  width: min(300px, 55%);
+}
+
+/* Compact mode keeps both explorers usable instead of enforcing desktop-sized tracks. */
+@media (max-width: 760px) {
+  .titlebar {
+    gap: 4px;
+    padding-left: 7px;
+  }
+  .titlebar__name {
+    display: none;
+  }
+  .workspace {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace > .sidebar {
+    position: absolute;
+    z-index: 30;
+    inset: 0 auto 0 0;
+    width: min(236px, 78vw);
+    box-shadow: var(--shadow);
+  }
+  .panes {
+    --bridge-width: 48px;
+  }
+  .bridge {
+    gap: 6px;
+  }
+  .bridge__btn {
+    width: 28px;
+    height: 28px;
+  }
+  .bridge__remote {
+    width: 42px;
+  }
+  .pane__head,
+  .pane__toolbar {
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+  .dock {
+    max-height: 34vh;
+  }
+  .scrim {
+    padding: 8px;
+  }
+  .hotkey-row,
+  .macro-step {
+    grid-template-columns: 1fr;
+  }
+  .macro-step__number {
+    display: none;
+  }
+  .macro-card__head,
+  .settings-section__head {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .macro-card__head .input,
+  .macro-card__head .hotkey-control {
+    flex: 1 1 180px;
+  }
+}
+
+@media (max-height: 500px) {
+  .dock {
+    max-height: 32vh;
+  }
+  .modal__head {
+    padding-block: 8px;
+  }
+  .modal__body {
+    padding-block: 10px;
+  }
+  .modal__foot {
+    padding-block: 7px;
+  }
 }
 
 .toast-stack {

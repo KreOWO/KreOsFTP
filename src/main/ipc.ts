@@ -1,4 +1,6 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { spawn } from 'node:child_process'
+import { stat } from 'node:fs/promises'
 import { t } from '../shared/i18n'
 import type {
   AppSettings,
@@ -42,6 +44,49 @@ function handle<T>(channel: string, fn: (...args: never[]) => Promise<T> | T): v
   })
 }
 
+function spawnDetached(executable: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false
+    })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      child.unref()
+      resolve()
+    })
+  })
+}
+
+async function openFolderInTerminal(path: string): Promise<void> {
+  const info = await stat(path)
+  if (!info.isDirectory()) throw new Error(t('Укажите существующую папку'))
+
+  if (process.platform === 'win32') {
+    // cwd задаётся напрямую процессу: путь не вставляется в командную строку и
+    // символы вроде &, ^ или пробела не могут превратиться в CMD-команду.
+    await spawnDetached(process.env.ComSpec || 'cmd.exe', ['/K'], path)
+    return
+  }
+  if (process.platform === 'darwin') {
+    await spawnDetached('/usr/bin/open', ['-a', 'Terminal', path], path)
+    return
+  }
+
+  const candidates = ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm']
+  for (const executable of candidates) {
+    try {
+      await spawnDetached(executable, [], path)
+      return
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  throw new Error(t('Системный терминал не найден'))
+}
+
 export interface Services {
   store: Store
   sessions: SessionManager
@@ -59,6 +104,10 @@ export function registerIpc(services: Services): void {
   handle('app:settings:save', (patch: Partial<AppSettings>) => store.saveSettings(patch))
   handle('app:encryption-available', () => store.isEncryptionAvailable())
   handle('app:git-info', () => readGitInfo())
+  handle('app:log', (sessionId: string | null, message: string) => {
+    const safeMessage = String(message).trim().slice(0, 500)
+    if (safeMessage) sessions.log(sessionId, 'info', safeMessage)
+  })
   handle('app:open-external', async (url: string) => {
     // Адрес приходит из конфигурации git, то есть из файла на диске.
     // Разрешаем только веб-схемы, чтобы file: или подобное не открылось.
@@ -145,6 +194,7 @@ export function registerIpc(services: Services): void {
     const problem = await shell.openPath(path)
     if (problem) throw new Error(problem)
   })
+  handle('local:terminal', (path: string) => openFolderInTerminal(path))
 
   // --------------------------------------------------------------- dialogs
   handle('dialog:directory', async (title: string, defaultPath?: string) => {
@@ -214,6 +264,11 @@ export function registerIpc(services: Services): void {
     terminals.resize(sessionId, columns, rows)
   )
   handle('ssh:close', (sessionId: string) => terminals.close(sessionId))
+  handle('ssh:automation-start', (sessionId: string, cwd: string) =>
+    terminals.startAutomation(sessionId, cwd)
+  )
+  handle('ssh:exec', (sessionId: string, command: string) => terminals.execute(sessionId, command))
+  handle('ssh:automation-stop', (sessionId: string) => terminals.stopAutomation(sessionId))
 
   // ----------------------------------------------------------------- queue
   handle('queue:snapshot', () => queue.snapshot())
@@ -247,6 +302,9 @@ export function registerIpc(services: Services): void {
   )
   handle('queue:sync-from-server', (sessionId: string, localRoot: string, remoteRoot: string) =>
     queue.syncFromRemote(sessionId, localRoot, remoteRoot)
+  )
+  handle('queue:wait-idle', (sessionId: string, since: number) =>
+    queue.waitForIdle(sessionId, since)
   )
   handle('queue:cancel', (itemId: string) => {
     queue.cancel(itemId)

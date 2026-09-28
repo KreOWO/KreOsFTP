@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 
 interface TooltipState {
-  button: HTMLButtonElement
+  anchor: HTMLElement
   text: string
   left: number
   top: number
@@ -10,24 +10,24 @@ interface TooltipState {
   originOffsetX: number
 }
 
-function stateFor(button: HTMLButtonElement): TooltipState | null {
-  const nativeTitle = button.getAttribute('title')?.trim()
+function stateFor(anchor: HTMLElement): TooltipState | null {
+  const nativeTitle = anchor.getAttribute('title')?.trim()
   if (nativeTitle) {
-    button.removeAttribute('title')
-    button.dataset.tooltip = nativeTitle
+    anchor.removeAttribute('title')
+    anchor.dataset.tooltip = nativeTitle
   }
   const text =
-    button.dataset.tooltip?.trim() ||
-    button.getAttribute('aria-label')?.trim() ||
-    button.textContent?.replace(/\s+/g, ' ').trim() ||
+    anchor.dataset.tooltip?.trim() ||
+    anchor.getAttribute('aria-label')?.trim() ||
+    anchor.textContent?.replace(/\s+/g, ' ').trim() ||
     ''
   if (!text) return null
-  const rect = button.getBoundingClientRect()
+  const rect = anchor.getBoundingClientRect()
   const above = rect.bottom + 62 > window.innerHeight && rect.top > 62
   const buttonCenter = rect.left + rect.width / 2
   const left = Math.max(160, Math.min(window.innerWidth - 160, buttonCenter))
   return {
-    button,
+    anchor,
     text,
     left,
     top: above ? rect.top - 7 : rect.bottom + 7,
@@ -42,15 +42,15 @@ export function ButtonTooltip(): ReactElement | null {
 
   useEffect(() => {
     const show = (target: EventTarget | null): void => {
-      const button = target instanceof Element ? target.closest('button') : null
-      if (button instanceof HTMLButtonElement) setTooltip(stateFor(button))
+      const anchor = target instanceof Element ? target.closest('button, [data-tooltip]') : null
+      if (anchor instanceof HTMLElement) setTooltip(stateFor(anchor))
     }
     const over = (event: PointerEvent): void => show(event.target)
     const out = (event: PointerEvent): void => {
       setTooltip((current) => {
         if (!current) return null
         const next = event.relatedTarget
-        return next instanceof Node && current.button.contains(next) ? current : null
+        return next instanceof Node && current.anchor.contains(next) ? current : null
       })
     }
     const focus = (event: FocusEvent): void => show(event.target)
@@ -77,19 +77,19 @@ export function ButtonTooltip(): ReactElement | null {
   // Some buttons replace their description with live operation status while
   // the pointer remains over them. Keep the already-open tooltip in sync.
   useEffect(() => {
-    const button = tooltip?.button
-    if (!button) return
+    const anchor = tooltip?.anchor
+    if (!anchor) return
     const observer = new MutationObserver(() => {
-      setTooltip((current) => (current?.button === button ? stateFor(button) : current))
+      setTooltip((current) => (current?.anchor === anchor ? stateFor(anchor) : current))
     })
-    observer.observe(button, {
+    observer.observe(anchor, {
       attributes: true,
       attributeFilter: ['data-tooltip', 'aria-label']
     })
     return () => observer.disconnect()
-  }, [tooltip?.button])
+  }, [tooltip?.anchor])
 
-  if (!tooltip || !tooltip.button.isConnected) return null
+  if (!tooltip || !tooltip.anchor.isConnected) return null
   return (
     <div
       key={`${tooltip.left}:${tooltip.top}:${tooltip.text}`}

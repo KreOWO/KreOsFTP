@@ -295,7 +295,7 @@ export function SiteDialog(props: SiteDialogProps): ReactElement {
                     className="input input--mono"
                     value={draft.privateKeyPath}
                     spellCheck={false}
-                    placeholder="C:\Users\…\.ssh\id_ed25519"
+                    placeholder="Путь к файлу id_ed25519"
                     onChange={(e) => patch({ privateKeyPath: e.target.value })}
                   />
                   <button className="btn" onClick={pickKey} type="button">

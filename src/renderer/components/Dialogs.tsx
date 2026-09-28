@@ -1,8 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { LANGUAGES, LANGUAGE_NAMES, t , type Language } from '../../shared/i18n'
-import type { ReactElement, ReactNode } from 'react'
-import type { AppSettings, ConflictAction, ConflictPolicy, ConflictRequest } from '@shared/types'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactElement, ReactNode } from 'react'
+import type {
+  AppSettings,
+  AutomationMacro,
+  ConflictAction,
+  ConflictPolicy,
+  ConflictRequest,
+  HotkeyAction,
+  MacroStep,
+  SiteSummary
+} from '@shared/types'
 import { formatDate, formatSize } from '../format'
+import {
+  formatHotkey,
+  hotkeyActionLabel,
+  hotkeyFromEvent,
+  modifierHotkeyFromEvent,
+  tooltipWithHotkey
+} from '../hotkeys'
 
 /* -------------------------------------------------------------------------- */
 
@@ -351,9 +367,212 @@ export function DropTargetDialog(props: DropTargetProps): ReactElement {
 
 interface SettingsProps {
   settings: AppSettings
+  sites: SiteSummary[]
   encryptionAvailable: boolean
   onChange: (patch: Partial<AppSettings>) => void
+  onRunMacro: (macro: AutomationMacro) => void
   onClose: () => void
+}
+
+function HotkeyInput(props: {
+  value: string
+  conflicts: string[]
+  onChange: (value: string) => void
+}): ReactElement {
+  const [capturing, setCapturing] = useState(false)
+  const [pressedModifiers, setPressedModifiers] = useState('')
+  const capturingRef = useRef(false)
+  const conflictMessage = props.conflicts.length > 0
+    ? t('Сочетание уже используется: {0}', props.conflicts.join(', '))
+    : ''
+
+  const beginCapture = (): void => {
+    capturingRef.current = true
+    setCapturing(true)
+    setPressedModifiers('')
+  }
+  const endCapture = (): void => {
+    capturingRef.current = false
+    setCapturing(false)
+    setPressedModifiers('')
+  }
+  const capture = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!capturingRef.current) beginCapture()
+    if (event.key === 'Escape') {
+      endCapture()
+      event.currentTarget.blur()
+      return
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      props.onChange('')
+      endCapture()
+      event.currentTarget.blur()
+      return
+    }
+    const modifiers = modifierHotkeyFromEvent(event)
+    setPressedModifiers(modifiers)
+    const value = hotkeyFromEvent(event)
+    if (value) {
+      props.onChange(value)
+      endCapture()
+      event.currentTarget.blur()
+    }
+  }
+  const release = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (!capturingRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+    setPressedModifiers(modifierHotkeyFromEvent(event))
+  }
+  const visibleValue = capturing
+    ? pressedModifiers
+      ? formatHotkey(pressedModifiers)
+      : t('Нажмите сочетание клавиш')
+    : props.value
+      ? formatHotkey(props.value)
+      : t('Добавить хоткей')
+  return (
+    <span
+      className={'hotkey-control' + (conflictMessage ? ' hotkey-control--conflict' : '')}
+      data-tooltip={conflictMessage || t('Нажмите сочетание; Backspace удаляет его')}
+    >
+      <input
+        className="input input--mono hotkey-input"
+        readOnly
+        value={visibleValue}
+        onKeyDown={capture}
+        onKeyUp={release}
+        onFocus={beginCapture}
+        onClick={beginCapture}
+        onBlur={endCapture}
+        aria-invalid={Boolean(conflictMessage)}
+        aria-label={conflictMessage || t('Горячая клавиша')}
+      />
+      {conflictMessage && <span className="hotkey-control__warning" aria-hidden="true">!</span>}
+    </span>
+  )
+}
+
+function newMacroStep(type: MacroStep['type'], sites: SiteSummary[]): MacroStep {
+  const id = crypto.randomUUID()
+  if (type === 'connect') return { id, type, siteId: sites[0]?.id ?? '' }
+  if (type === 'command') return { id, type, command: '' }
+  return { id, type }
+}
+
+function MacroEditor(props: {
+  macro: AutomationMacro
+  sites: SiteSummary[]
+  hotkeyConflicts: string[]
+  onChange: (macro: AutomationMacro) => void
+  onDelete: () => void
+  onRun: () => void
+}): ReactElement {
+  const { macro, sites, onChange } = props
+  const [nextType, setNextType] = useState<MacroStep['type']>('connect')
+  const runnable = Boolean(
+    macro.name.trim() &&
+    macro.steps.length > 0 &&
+    macro.steps.every((step) =>
+      step.type === 'command' ? step.command.trim() : step.type === 'connect' ? step.siteId : true
+    )
+  )
+  const updateStep = (id: string, patch: Partial<MacroStep>): void => {
+    onChange({
+      ...macro,
+      steps: macro.steps.map((step) => (step.id === id ? ({ ...step, ...patch } as MacroStep) : step))
+    })
+  }
+  const moveStep = (index: number, direction: -1 | 1): void => {
+    const target = index + direction
+    if (target < 0 || target >= macro.steps.length) return
+    const steps = [...macro.steps]
+    ;[steps[index], steps[target]] = [steps[target], steps[index]]
+    onChange({ ...macro, steps })
+  }
+  return (
+    <section className="macro-card">
+      <div className="macro-card__head">
+        <input
+          className="input"
+          value={macro.name}
+          maxLength={80}
+          onChange={(event) => onChange({ ...macro, name: event.target.value })}
+          placeholder={t('Название макроса')}
+        />
+        <HotkeyInput
+          value={macro.hotkey}
+          conflicts={props.hotkeyConflicts}
+          onChange={(hotkey) => onChange({ ...macro, hotkey })}
+        />
+        <button
+          className="btn"
+          type="button"
+          disabled={!runnable}
+          onClick={props.onRun}
+          data-tooltip={tooltipWithHotkey(t('Запустить'), macro.hotkey)}
+        >
+          {t('Запустить')}
+        </button>
+        <button className="btn btn--danger" type="button" onClick={props.onDelete}>
+          {t('Удалить')}
+        </button>
+      </div>
+      <div className="macro-steps">
+        {macro.steps.map((step, index) => (
+          <div className="macro-step" key={step.id}>
+            <span className="macro-step__number">{index + 1}</span>
+            <strong>{macroStepLabel(step.type)}</strong>
+            {step.type === 'connect' && (
+              <select
+                className="select"
+                value={step.siteId}
+                onChange={(event) => updateStep(step.id, { siteId: event.target.value })}
+              >
+                {sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+              </select>
+            )}
+            {step.type === 'command' && (
+              <input
+                className="input input--mono"
+                value={step.command}
+                onChange={(event) => updateStep(step.id, { command: event.target.value })}
+                placeholder="docker compose up -d"
+              />
+            )}
+            {step.type !== 'connect' && step.type !== 'command' && <span />}
+            <div className="macro-step__actions">
+              <button className="btn btn--ghost btn--icon" type="button" disabled={index === 0} onClick={() => moveStep(index, -1)}>↑</button>
+              <button className="btn btn--ghost btn--icon" type="button" disabled={index === macro.steps.length - 1} onClick={() => moveStep(index, 1)}>↓</button>
+              <button className="btn btn--ghost btn--icon" type="button" onClick={() => onChange({ ...macro, steps: macro.steps.filter((item) => item.id !== step.id) })}>×</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="macro-card__add">
+        <select className="select" value={nextType} onChange={(event) => setNextType(event.target.value as MacroStep['type'])}>
+          {(['connect', 'syncToServer', 'syncFromServer', 'command', 'disconnect'] as const).map((type) => (
+            <option key={type} value={type}>{macroStepLabel(type)}</option>
+          ))}
+        </select>
+        <button className="btn" type="button" disabled={nextType === 'connect' && sites.length === 0} onClick={() => onChange({ ...macro, steps: [...macro.steps, newMacroStep(nextType, sites)] })}>
+          {t('Добавить шаг')}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function macroStepLabel(type: MacroStep['type']): string {
+  return {
+    connect: t('Подключение к серверу'),
+    syncToServer: t('Обновление сервера'),
+    syncFromServer: t('Обновление локальной папки'),
+    command: t('SSH-команда'),
+    disconnect: t('Отключение от сервера')
+  }[type]
 }
 
 function policyLabels(): Record<ConflictPolicy, string> {
@@ -383,8 +602,41 @@ function policyHints(): Partial<Record<ConflictPolicy, string>> {
   }
 }
 
+const SETTINGS_PAGES = ['general', 'transfers', 'hotkeys', 'macros'] as const
+type SettingsPage = (typeof SETTINGS_PAGES)[number]
+
+function settingsPageLabels(): Record<SettingsPage, string> {
+  return {
+    general: t('Общие'),
+    transfers: t('Передачи'),
+    hotkeys: t('Горячие клавиши'),
+    macros: t('Макросы')
+  }
+}
+
 export function SettingsDialog(props: SettingsProps): ReactElement {
-  const { settings, encryptionAvailable, onChange, onClose } = props
+  const { settings, sites, encryptionAvailable, onChange, onClose } = props
+  const [page, setPage] = useState<SettingsPage>('general')
+  const hotkeyAssignments = [
+    ...(Object.keys(settings.hotkeys) as HotkeyAction[]).map((action) => ({
+      owner: `action:${action}`,
+      value: settings.hotkeys[action],
+      label: hotkeyActionLabel(action)
+    })),
+    ...settings.macros.map((macro) => ({
+      owner: `macro:${macro.id}`,
+      value: macro.hotkey,
+      label: t('Макрос «{0}»', macro.name)
+    }))
+  ]
+  const conflictsFor = (owner: string, value: string): string[] =>
+    value
+      ? hotkeyAssignments
+          .filter((assignment) => assignment.owner !== owner && assignment.value === value)
+          .map((assignment) => assignment.label)
+      : []
+  const updateMacro = (macro: AutomationMacro): void =>
+    onChange({ macros: settings.macros.map((item) => (item.id === macro.id ? macro : item)) })
   return (
     <div
       className="scrim"
@@ -392,12 +644,27 @@ export function SettingsDialog(props: SettingsProps): ReactElement {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={t('Настройки')}>
+      <div className="modal modal--settings" role="dialog" aria-modal="true" aria-label={t('Настройки')}>
         <div className="modal__head">
           <h2 className="modal__title">{t('Настройки')}</h2>
+          <div className="settings-tabs" role="tablist" aria-label={t('Разделы настроек')}>
+            {SETTINGS_PAGES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="tab"
+                aria-selected={page === item}
+                className={'settings-tabs__button' + (page === item ? ' settings-tabs__button--active' : '')}
+                onClick={() => setPage(item)}
+              >
+                {settingsPageLabels()[item]}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="modal__body">
-          <div className="field">
+          {page === 'general' && <div className="settings-page">
+            <div className="field">
             <label className="field__label" htmlFor="set-language">
               {t('Язык интерфейса')}
             </label>
@@ -413,9 +680,9 @@ export function SettingsDialog(props: SettingsProps): ReactElement {
                 </option>
               ))}
             </select>
-          </div>
+            </div>
 
-          <div className="field">
+            <div className="field">
             <label className="field__label" htmlFor="set-theme">
               
               {t('Тема')}
@@ -430,9 +697,26 @@ export function SettingsDialog(props: SettingsProps): ReactElement {
               <option value="light">{t('Светлая')}</option>
               <option value="system">{t('Как в системе')}</option>
             </select>
-          </div>
+            </div>
 
-          <div className="field">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={settings.showHiddenFiles}
+                onChange={(e) => onChange({ showHiddenFiles: e.target.checked })}
+              />
+              <span>{t('Показывать скрытые файлы (начинающиеся с точки)')}</span>
+            </label>
+
+            <div className="notice">
+              {encryptionAvailable
+                ? t('Пароли шифруются средствами ОС (DPAPI) и привязаны к вашей учётной записи Windows.')
+                : t('Системное хранилище секретов недоступно — пароли не сохраняются.')}
+            </div>
+          </div>}
+
+          {page === 'transfers' && <div className="settings-page">
+            <div className="field">
             <label className="field__label" htmlFor="set-conflict">
               
               {t('Если файл уже существует')}
@@ -452,9 +736,9 @@ export function SettingsDialog(props: SettingsProps): ReactElement {
             {policyHints()[settings.conflictPolicy] && (
               <span className="field__hint">{policyHints()[settings.conflictPolicy]}</span>
             )}
-          </div>
+            </div>
 
-          <div className="field">
+            <div className="field">
             <label className="field__label" htmlFor="set-concurrency">
               
               {t('Параллельные передачи')}
@@ -475,31 +759,64 @@ export function SettingsDialog(props: SettingsProps): ReactElement {
               
               {t('Каждая параллельная передача использует отдельное соединение с сервером.')}
             </span>
-          </div>
+            </div>
 
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={settings.showHiddenFiles}
-              onChange={(e) => onChange({ showHiddenFiles: e.target.checked })}
-            />
-            <span>{t('Показывать скрытые файлы (начинающиеся с точки)')}</span>
-          </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={settings.confirmDelete}
+                onChange={(e) => onChange({ confirmDelete: e.target.checked })}
+              />
+              <span>{t('Подтверждать удаление')}</span>
+            </label>
+          </div>}
 
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={settings.confirmDelete}
-              onChange={(e) => onChange({ confirmDelete: e.target.checked })}
-            />
-            <span>{t('Подтверждать удаление')}</span>
-          </label>
+          {page === 'hotkeys' && <div className="settings-page">
+            <h3>{t('Горячие клавиши')}</h3>
+            <span className="field__hint">{t('Щёлкните поле и нажмите сочетание клавиш.')}</span>
+            <div className="hotkey-list">
+              {(Object.keys(settings.hotkeys) as HotkeyAction[]).map((action) => (
+                <label className="hotkey-row" key={action}>
+                  <span>{hotkeyActionLabel(action)}</span>
+                  <HotkeyInput
+                    value={settings.hotkeys[action]}
+                    conflicts={conflictsFor(`action:${action}`, settings.hotkeys[action])}
+                    onChange={(value) => onChange({ hotkeys: { ...settings.hotkeys, [action]: value } })}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>}
 
-          <div className="notice">
-            {encryptionAvailable
-              ? t('Пароли шифруются средствами ОС (DPAPI) и привязаны к вашей учётной записи Windows.')
-              : t('Системное хранилище секретов недоступно — пароли не сохраняются.')}
-          </div>
+          {page === 'macros' && <div className="settings-page">
+            <div className="settings-section__head">
+              <div>
+                <h3>{t('Макросы')}</h3>
+                <span className="field__hint">{t('Шаги выполняются строго по порядку; передача дожидается завершения.')}</span>
+              </div>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => onChange({
+                  macros: [...settings.macros, { id: crypto.randomUUID(), name: t('Новый макрос'), hotkey: '', steps: [] }]
+                })}
+              >
+                {t('Добавить макрос')}
+              </button>
+            </div>
+            {settings.macros.length === 0 && <div className="empty-note">{t('Макросов пока нет.')}</div>}
+            {settings.macros.map((macro) => (
+              <MacroEditor
+                key={macro.id}
+                macro={macro}
+                sites={sites}
+                hotkeyConflicts={conflictsFor(`macro:${macro.id}`, macro.hotkey)}
+                onChange={updateMacro}
+                onDelete={() => onChange({ macros: settings.macros.filter((item) => item.id !== macro.id) })}
+                onRun={() => props.onRunMacro(macro)}
+              />
+            ))}
+          </div>}
         </div>
         <div className="modal__foot">
           <span className="modal__foot-spacer" />

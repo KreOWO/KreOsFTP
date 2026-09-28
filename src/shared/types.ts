@@ -32,6 +32,29 @@ export interface QuickCommand {
   command: string
 }
 
+export type HotkeyAction =
+  | 'connectLast'
+  | 'toggleSsh'
+  | 'syncToServer'
+  | 'syncFromServer'
+  | 'disconnect'
+
+export type AppHotkeys = Record<HotkeyAction, string>
+
+export type MacroStep =
+  | { id: string; type: 'connect'; siteId: string }
+  | { id: string; type: 'syncToServer' }
+  | { id: string; type: 'syncFromServer' }
+  | { id: string; type: 'command'; command: string }
+  | { id: string; type: 'disconnect' }
+
+export interface AutomationMacro {
+  id: string
+  name: string
+  hotkey: string
+  steps: MacroStep[]
+}
+
 /** A saved server profile. `password`/`passphrase` never leave the main process
  *  once saved — they are stored encrypted and re-read only at connect time. */
 export interface SiteConfig {
@@ -236,6 +259,18 @@ export interface AppSettings {
   conflictPolicy: ConflictPolicy
   concurrentTransfers: number
   confirmDelete: boolean
+  hotkeys: AppHotkeys
+  macros: AutomationMacro[]
+  /** Last successfully connected profile; used for reconnect after restart. */
+  lastSiteId: string | null
+}
+
+export const DEFAULT_HOTKEYS: AppHotkeys = {
+  connectLast: 'Ctrl+Shift+KeyL',
+  toggleSsh: 'Ctrl+Shift+KeyT',
+  syncToServer: 'Ctrl+Shift+KeyU',
+  syncFromServer: 'Ctrl+Shift+KeyD',
+  disconnect: 'Ctrl+Shift+KeyX'
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -244,7 +279,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showHiddenFiles: false,
   conflictPolicy: 'ask',
   concurrentTransfers: 3,
-  confirmDelete: true
+  confirmDelete: true,
+  hotkeys: { ...DEFAULT_HOTKEYS },
+  macros: [],
+  lastSiteId: null
 }
 
 /** Uniform failure shape crossing IPC — Error objects do not survive structured clone well. */

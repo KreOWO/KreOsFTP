@@ -74,6 +74,10 @@ export class TransferQueue {
   private warnedNoMtime = new Set<string>()
   private dirty = false
   private flushTimer: NodeJS.Timeout | null = null
+  private idleWaiters = new Map<
+    string,
+    Set<{ since: number; resolve: () => void; reject: (error: Error) => void }>
+  >()
 
   constructor(
     private sessions: SessionManager,
@@ -86,6 +90,40 @@ export class TransferQueue {
     return this.order
       .map((id) => this.items.get(id))
       .filter((i): i is TransferItem => i !== undefined)
+  }
+
+  /** Used by macros so a following SSH command never races queued transfers. */
+  waitForIdle(sessionId: string, since: number): Promise<void> {
+    if (!this.workers.has(sessionId) && !this.syncingSessions.has(sessionId)) {
+      return this.idleResult(sessionId, since)
+    }
+    return new Promise((resolve, reject) => {
+      const waiters = this.idleWaiters.get(sessionId) ?? new Set()
+      waiters.add({ since, resolve, reject })
+      this.idleWaiters.set(sessionId, waiters)
+    })
+  }
+
+  private idleResult(sessionId: string, since: number): Promise<void> {
+    const failed = this.snapshot().find(
+      (item) =>
+        item.sessionId === sessionId &&
+        item.status === 'error' &&
+        (item.startedAt ?? item.finishedAt ?? 0) >= since
+    )
+    return failed
+      ? Promise.reject(new Error(t('Передача завершилась с ошибкой: {0}', failed.error ?? failed.name)))
+      : Promise.resolve()
+  }
+
+  private settleIdleWaiters(sessionId: string): void {
+    if (this.workers.has(sessionId) || this.syncingSessions.has(sessionId)) return
+    const waiters = this.idleWaiters.get(sessionId)
+    if (!waiters) return
+    this.idleWaiters.delete(sessionId)
+    for (const waiter of waiters) {
+      void this.idleResult(sessionId, waiter.since).then(waiter.resolve, waiter.reject)
+    }
   }
 
   private markDirty(immediate = false): void {
@@ -365,6 +403,7 @@ export class TransferQueue {
     }
     } finally {
       this.syncingSessions.delete(sessionId)
+      this.settleIdleWaiters(sessionId)
     }
   }
 
@@ -411,6 +450,7 @@ export class TransferQueue {
     }
     } finally {
       this.syncingSessions.delete(sessionId)
+      this.settleIdleWaiters(sessionId)
     }
   }
 
@@ -524,6 +564,9 @@ export class TransferQueue {
       }
     }
     this.markDirty(true)
+    const waiters = this.idleWaiters.get(sessionId)
+    this.idleWaiters.delete(sessionId)
+    for (const waiter of waiters ?? []) waiter.reject(new Error(t('Соединение закрыто')))
   }
 
   // -------------------------------------------------------------------- worker
@@ -553,6 +596,7 @@ export class TransferQueue {
           if (current?.size === 0) this.workers.delete(sessionId)
           this.flush()
           if (this.nextPending(sessionId)) this.ensureWorker(sessionId)
+          else this.settleIdleWaiters(sessionId)
         })
       workers.add(worker)
     }

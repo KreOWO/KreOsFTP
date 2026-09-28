@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+local.properties
+**/build/
+*.iml
+.idea/
+captures/
+
+# Do not accidentally commit private signing keys. The public community key is
+# the single intentional exception.
+*.jks
+*.keystore
+*.p12
+!signing/community-release.p12
+keystore.local.properties

@@ -44,6 +44,7 @@ const api = {
     saveSettings: (patch: Partial<AppSettings>) => call<AppSettings>('app:settings:save', patch),
     encryptionAvailable: () => call<boolean>('app:encryption-available'),
     gitInfo: () => call<GitRepositoryInfo | null>('app:git-info'),
+    log: (sessionId: string | null, message: string) => call<void>('app:log', sessionId, message),
     openExternal: (url: string) => call<void>('app:open-external', url)
   },
   sites: {
@@ -80,7 +81,8 @@ const api = {
     rename: (dir: string, from: string, to: string) => call<void>('local:rename', dir, from, to),
     remove: (path: string) => call<void>('local:remove', path),
     reveal: (path: string) => call<void>('local:reveal', path),
-    open: (path: string) => call<void>('local:open', path)
+    open: (path: string) => call<void>('local:open', path),
+    openTerminal: (path: string) => call<void>('local:terminal', path)
   },
   dialog: {
     directory: (title: string, defaultPath?: string) =>
@@ -114,6 +116,8 @@ const api = {
       call<VersionSyncResult>('queue:sync-to-server', sessionId, localRoot, remoteRoot),
     syncFromServer: (sessionId: string, localRoot: string, remoteRoot: string) =>
       call<VersionSyncResult>('queue:sync-from-server', sessionId, localRoot, remoteRoot),
+    waitIdle: (sessionId: string, since: number) =>
+      call<void>('queue:wait-idle', sessionId, since),
     cancel: (itemId: string) => call<void>('queue:cancel', itemId),
     cancelAll: (sessionId?: string) => call<void>('queue:cancel-all', sessionId),
     retry: (itemId: string) => call<void>('queue:retry', itemId),
@@ -127,7 +131,11 @@ const api = {
     write: (sessionId: string, data: string) => call<void>('ssh:write', sessionId, data),
     resize: (sessionId: string, columns: number, rows: number) =>
       call<void>('ssh:resize', sessionId, columns, rows),
-    close: (sessionId: string) => call<void>('ssh:close', sessionId)
+    close: (sessionId: string) => call<void>('ssh:close', sessionId),
+    startAutomation: (sessionId: string, cwd: string) =>
+      call<void>('ssh:automation-start', sessionId, cwd),
+    stopAutomation: (sessionId: string) => call<void>('ssh:automation-stop', sessionId),
+    exec: (sessionId: string, command: string) => call<string>('ssh:exec', sessionId, command)
   },
   clipboard: {
     readText: () => clipboard.readText(),

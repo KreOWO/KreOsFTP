@@ -7,10 +7,12 @@ import type {
   WheelEvent as ReactWheelEvent
 } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { QuickCommand, SshTerminalState } from '@shared/types'
 import { IconCopy, IconPaste, IconPlus, IconTrash, IconX } from './Icons'
+import { tooltipWithHotkey } from '../hotkeys'
 
 interface SshTerminalProps {
   sessionId: string
@@ -18,6 +20,7 @@ interface SshTerminalProps {
   commands: QuickCommand[]
   onCommandsChange: (commands: QuickCommand[]) => Promise<void>
   onClose: () => void
+  toggleHotkey: string
 }
 
 export function SshTerminal({
@@ -25,7 +28,8 @@ export function SshTerminal({
   name,
   commands,
   onCommandsChange,
-  onClose
+  onClose,
+  toggleHotkey
 }: SshTerminalProps): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -53,16 +57,21 @@ export function SshTerminal({
 
   const paste = (): void => {
     const text = window.kreos.clipboard.readText()
-    if (text) void window.kreos.ssh.write(sessionId, text).catch(() => undefined)
+    // xterm's paste() normalises line endings and honours bracketed paste mode,
+    // then hands the text to onData like typed input.
+    if (text) terminalRef.current?.paste(text)
     terminalRef.current?.focus()
   }
 
-  const runQuickCommand = (command: string): void => {
-    const input = command.replace(/\r?\n/g, '\r').replace(/\r+$/, '') + '\r'
+  const sendInput = (input: string): void => {
     void window.kreos.ssh.write(sessionId, input).catch((error: Error) => {
       terminalRef.current?.writeln(`\r\n\x1b[31m${error.message}\x1b[0m`)
     })
     terminalRef.current?.focus()
+  }
+
+  const runQuickCommand = (command: string): void => {
+    sendInput(command.replace(/\r?\n/g, '\r').replace(/\r+$/, '') + '\r')
   }
 
   const openAddCommand = (): void => {
@@ -174,11 +183,14 @@ export function SshTerminal({
     const terminal = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
-      fontFamily: "'Cascadia Mono', Consolas, monospace",
+      fontFamily: "'Cascadia Mono', Consolas, 'Segoe UI Emoji', monospace",
       fontSize: 12,
       lineHeight: 1.15,
       scrollback: 5000,
-      allowProposedApi: false,
+      // xterm exposes Unicode width providers through its proposed API.
+      // Unicode 11 fixes cell widths for modern emoji and prevents adjacent
+      // prompt glyphs from being painted into the same terminal cell.
+      allowProposedApi: true,
       theme: {
         background: '#0b0f14',
         foreground: '#d7e0ea',
@@ -195,6 +207,9 @@ export function SshTerminal({
       }
     })
     const fit = new FitAddon()
+    const unicode = new Unicode11Addon()
+    terminal.loadAddon(unicode)
+    terminal.unicode.activeVersion = '11'
     terminal.loadAddon(fit)
     terminal.open(host)
     terminalRef.current = terminal
@@ -231,17 +246,18 @@ export function SshTerminal({
         terminal.writeln(`\r\n\x1b[31m${error.message}\x1b[0m`)
       })
     })
+    // Ctrl+C / Ctrl+V (Shift optional) work with the local clipboard and never
+    // reach the server; the toolbar buttons send ^C / ^V instead. Alt is
+    // excluded because AltGr arrives as Ctrl+Alt and types characters.
     terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type !== 'keydown' || !event.ctrlKey || !event.shiftKey) return true
-      if (event.code === 'KeyC') {
-        copy()
-        return false
-      }
-      if (event.code === 'KeyV') {
-        paste()
-        return false
-      }
-      return true
+      if (event.type !== 'keydown' || !event.ctrlKey || event.altKey || event.metaKey) return true
+      if (event.code !== 'KeyC' && event.code !== 'KeyV') return true
+      // Returning false only stops xterm; without preventDefault Chromium
+      // would still fire its own paste event and xterm would paste twice.
+      event.preventDefault()
+      if (event.code === 'KeyC') copy()
+      else paste()
+      return false
     })
 
     const observer = new ResizeObserver(fitAndResize)
@@ -321,18 +337,18 @@ export function SshTerminal({
           <button
             className="btn btn--ghost btn--icon ssh-terminal__action"
             type="button"
-            onClick={copy}
-            data-tooltip={t('Копировать выделенный текст')}
-            aria-label={t('Копировать выделенный текст')}
+            onClick={() => sendInput('\x03')}
+            data-tooltip={t('Отправить Ctrl+C на сервер')}
+            aria-label={t('Отправить Ctrl+C на сервер')}
           >
             <IconCopy size={13} />
           </button>
           <button
             className="btn btn--ghost btn--icon ssh-terminal__action"
             type="button"
-            onClick={paste}
-            data-tooltip={t('Вставить из буфера обмена')}
-            aria-label={t('Вставить из буфера обмена')}
+            onClick={() => sendInput('\x16')}
+            data-tooltip={t('Отправить Ctrl+V на сервер')}
+            aria-label={t('Отправить Ctrl+V на сервер')}
           >
             <IconPaste size={13} />
           </button>
@@ -341,7 +357,7 @@ export function SshTerminal({
             type="button"
             onClick={onClose}
             aria-label={t('Закрыть SSH-терминал')}
-            data-tooltip={t('Закрыть SSH-терминал')}
+            data-tooltip={tooltipWithHotkey(t('Закрыть SSH-терминал'), toggleHotkey)}
           >
             <IconX size={12} />
           </button>

@@ -4,12 +4,57 @@ import { copyFile, readFile, writeFile, rename, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app, safeStorage } from 'electron'
 import {
+  DEFAULT_HOTKEYS,
   DEFAULT_SETTINGS,
+  type AutomationMacro,
   type AppSettings,
   type QuickCommand,
   type SiteConfig,
   type SiteSummary
 } from '@shared/types'
+
+const HOTKEY_PATTERN = /^(?:(?:Ctrl|Alt|Shift|Meta)\+)*(?:Key[A-Z]|Digit[0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Enter|Space|Tab|Arrow(?:Up|Down|Left|Right)|Home|End|Page(?:Up|Down)|Insert)$/
+
+function cleanHotkey(value: unknown): string {
+  const shortcut = typeof value === 'string' ? value.trim() : ''
+  return shortcut === '' || HOTKEY_PATTERN.test(shortcut) ? shortcut : ''
+}
+
+function cleanMacros(value: unknown): AutomationMacro[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 30).flatMap((raw): AutomationMacro[] => {
+    if (!raw || typeof raw !== 'object') return []
+    const macro = raw as Partial<AutomationMacro>
+    const id = String(macro.id ?? '').trim()
+    const name = String(macro.name ?? '').trim().slice(0, 80)
+    if (!id || !name || !Array.isArray(macro.steps)) return []
+    const steps = macro.steps.slice(0, 50).flatMap((step): AutomationMacro['steps'] => {
+      if (!step || typeof step !== 'object') return []
+      const candidate = step as AutomationMacro['steps'][number]
+      const stepId = String(candidate.id ?? '').trim()
+      if (!stepId) return []
+      if (candidate.type === 'connect') {
+        const siteId = String(candidate.siteId ?? '').trim()
+        return siteId ? [{ id: stepId, type: 'connect', siteId }] : []
+      }
+      if (candidate.type === 'command') {
+        const command = String(candidate.command ?? '').trim()
+        return command && command.length <= 4096 && !command.includes('\0')
+          ? [{ id: stepId, type: 'command', command }]
+          : []
+      }
+      if (
+        candidate.type === 'syncToServer' ||
+        candidate.type === 'syncFromServer' ||
+        candidate.type === 'disconnect'
+      ) {
+        return [{ id: stepId, type: candidate.type }]
+      }
+      return []
+    })
+    return [{ id, name, hotkey: cleanHotkey(macro.hotkey), steps }]
+  })
+}
 
 /** On-disk shape. Secrets are ciphertext, never plaintext. */
 interface StoredSite extends Omit<SiteConfig, 'password' | 'passphrase'> {
@@ -107,6 +152,15 @@ export class Store {
         settings: {
           ...DEFAULT_SETTINGS,
           ...(parsed.settings ?? {}),
+          hotkeys: Object.fromEntries(
+            Object.entries({
+              ...DEFAULT_HOTKEYS,
+              ...(parsed.settings?.hotkeys ?? {})
+            }).map(([key, value]) => [key, cleanHotkey(value)])
+          ) as AppSettings['hotkeys'],
+          macros: cleanMacros(parsed.settings?.macros),
+          lastSiteId:
+            typeof parsed.settings?.lastSiteId === 'string' ? parsed.settings.lastSiteId : null,
           concurrentTransfers:
             Number(parsed.version) < 2
               ? DEFAULT_SETTINGS.concurrentTransfers
@@ -203,6 +257,7 @@ export class Store {
 
   async deleteSite(id: string): Promise<void> {
     this.data.sites = this.data.sites.filter((s) => s.id !== id)
+    if (this.data.settings.lastSiteId === id) this.data.settings.lastSiteId = null
     await this.persist()
   }
 
@@ -239,6 +294,7 @@ export class Store {
     const site = this.data.sites.find((s) => s.id === id)
     if (!site) return
     site.lastUsedAt = Date.now()
+    this.data.settings.lastSiteId = id
     if (hostKeyFingerprint && !site.hostKeyFingerprint) {
       site.hostKeyFingerprint = hostKeyFingerprint
     }
@@ -262,14 +318,24 @@ export class Store {
   }
 
   async saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-    if (patch.concurrentTransfers !== undefined) {
-      patch.concurrentTransfers = Math.max(
+    const next = { ...patch }
+    if (next.concurrentTransfers !== undefined) {
+      next.concurrentTransfers = Math.max(
         1,
-        Math.min(6, Math.round(Number(patch.concurrentTransfers) || 1))
+        Math.min(6, Math.round(Number(next.concurrentTransfers) || 1))
       )
     }
-    this.data.settings = { ...this.data.settings, ...patch }
-    if (patch.language) setLanguage(patch.language)
+    if (next.hotkeys) {
+      next.hotkeys = Object.fromEntries(
+        Object.entries({ ...this.data.settings.hotkeys, ...next.hotkeys }).map(([key, value]) => [
+          key,
+          cleanHotkey(value)
+        ])
+      ) as AppSettings['hotkeys']
+    }
+    if (next.macros) next.macros = cleanMacros(next.macros)
+    this.data.settings = { ...this.data.settings, ...next }
+    if (next.language) setLanguage(next.language)
     await this.persist()
     return this.getSettings()
   }

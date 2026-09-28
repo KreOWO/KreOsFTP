@@ -8,16 +8,19 @@ import type {
 import {
   DEFAULT_SETTINGS,
   type AppSettings,
+  type AutomationMacro,
   type ConflictAction,
   type ConflictRequest,
   type FileEntry,
   type GitRepositoryInfo,
   type LogLine,
+  type MacroStep,
   type SessionInfo,
   type SiteSummary,
   type TransferItem,
   type VersionSyncPreview
 } from '@shared/types'
+import { eventMatchesHotkey, formatHotkey, hotkeyActionLabel, tooltipWithHotkey } from './hotkeys'
 import { useScrollEdges } from './useScrollEdges'
 import type { DroppedTransfer } from './dnd'
 import {
@@ -87,6 +90,13 @@ interface SyncPreviewCache {
   state: SyncPreviewState
 }
 
+interface SyncConfirmState {
+  direction: 'upload' | 'download'
+  localPath: string
+  remotePath: string
+  resolve?: (confirmed: boolean) => void
+}
+
 const MAX_LOG_LINES = 3000
 
 /** Remote paths are POSIX regardless of the local platform. */
@@ -108,6 +118,19 @@ function topLevelIncludedNames(preview: VersionSyncPreview): string[] {
   return [...new Set(preview.included.map((relative) => relative.split('/')[0]).filter(Boolean))]
 }
 
+function macroStepDescription(step: MacroStep, sites: SiteSummary[]): string {
+  if (step.type === 'connect') {
+    const site = sites.find((item) => item.id === step.siteId)
+    return t('Подключение к серверу: {0}', site?.name ?? step.siteId)
+  }
+  if (step.type === 'command') return t('SSH-команда: {0}', step.command)
+  return {
+    syncToServer: t('Обновление сервера'),
+    syncFromServer: t('Обновление локальной папки'),
+    disconnect: t('Отключение от сервера')
+  }[step.type]
+}
+
 export function App(): ReactElement {
   const api = window.kreos
 
@@ -123,7 +146,8 @@ export function App(): ReactElement {
    * подключение — самое частое действие сразу после разрыва, и ради него не
    * стоит открывать боковую панель.
    */
-  const [lastClosed, setLastClosed] = useState<SessionInfo | null>(null)
+  const [lastConnectedSiteId, setLastConnectedSiteId] = useState<string | null>(null)
+  const [lastConnectionHidden, setLastConnectionHidden] = useState(false)
   const [closedTooltip, setClosedTooltip] = useState<{
     anchor: HTMLElement
     left: number
@@ -152,7 +176,7 @@ export function App(): ReactElement {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [bridgePosition, setBridgePosition] = useState(50)
   const [syncing, setSyncing] = useState<'upload' | 'download' | null>(null)
-  const [syncConfirm, setSyncConfirm] = useState<'upload' | 'download' | null>(null)
+  const [syncConfirm, setSyncConfirm] = useState<SyncConfirmState | null>(null)
   const [syncPreview, setSyncPreview] = useState<SyncPreviewState | null>(null)
   const [sshSessionId, setSshSessionId] = useState<string | null>(null)
   const [remoteExplorerShare, setRemoteExplorerShare] = useState(58)
@@ -183,6 +207,7 @@ export function App(): ReactElement {
   const syncPreviewTokenRef = useRef<string | null>(null)
   const syncPreviewVisibleTokenRef = useRef<string | null>(null)
   const syncPreviewCacheRef = useRef<SyncPreviewCache | null>(null)
+  const macroRunningRef = useRef(false)
 
   const notify = useCallback((text: string, kind: Toast['kind'] = 'info'): void => {
     const id = ++toastSeq.current
@@ -192,10 +217,10 @@ export function App(): ReactElement {
 
   /** Профиль для серой вкладки, либо null — если он удалён или уже переподключён. */
   const ghostTab = useMemo(() => {
-    if (!lastClosed) return null
-    if (sessions.some((s) => s.siteId === lastClosed.siteId)) return null
-    return sites.find((s) => s.id === lastClosed.siteId) ?? null
-  }, [lastClosed, sessions, sites])
+    if (!lastConnectedSiteId || lastConnectionHidden) return null
+    if (sessions.some((s) => s.siteId === lastConnectedSiteId)) return null
+    return sites.find((s) => s.id === lastConnectedSiteId) ?? null
+  }, [lastConnectedSiteId, lastConnectionHidden, sessions, sites])
 
   // Зеркало для обработчика закрытия: он живёт в подписке и не видит свежий стейт.
   useEffect(() => {
@@ -221,6 +246,7 @@ export function App(): ReactElement {
         api.app.gitInfo()
       ])
       setSettings(loadedSettings)
+      setLastConnectedSiteId(loadedSettings.lastSiteId)
       setSites(loadedSites)
       setEncryptionAvailable(canEncrypt)
       setGitInfo(repository)
@@ -294,7 +320,8 @@ export function App(): ReactElement {
     )
     const offClosed = api.events.onSessionClosed(({ sessionId }) => {
       const closing = sessionsRef.current.find((s) => s.sessionId === sessionId)
-      if (closing) setLastClosed(closing)
+      if (closing) setLastConnectedSiteId(closing.siteId)
+      if (closing) setLastConnectionHidden(false)
       setSessions((list) => list.filter((s) => s.sessionId !== sessionId))
       setRemotePanes((panes) => {
         const next = { ...panes }
@@ -381,28 +408,21 @@ export function App(): ReactElement {
     void loadLocal(local.path)
   }, [local.path, loadLocal])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'F5') {
-        e.preventDefault()
-        refreshLocal()
-        refreshRemote()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [refreshLocal, refreshRemote])
-
   /* ------------------------------------------------------------------ connecting */
 
   const openSession = useCallback(
-    async (siteId: string, overrides?: { password?: string; passphrase?: string }): Promise<void> => {
+    async (
+      siteId: string,
+      overrides?: { password?: string; passphrase?: string }
+    ): Promise<SessionInfo> => {
       setConnectingSiteId(siteId)
       setConnectFailure(null)
       try {
         const info = await api.session.connect(siteId, overrides)
         setSessions((list) => [...list.filter((s) => s.sessionId !== info.sessionId), info])
-        setLastClosed((closed) => (closed && closed.siteId === info.siteId ? null : closed))
+        setLastConnectedSiteId(info.siteId)
+        setLastConnectionHidden(false)
+        setSettings((current) => ({ ...current, lastSiteId: info.siteId }))
         setActiveSessionId(info.sessionId)
         setRemotePanes((panes) => ({ ...panes, [info.sessionId]: { ...EMPTY_PANE, path: info.cwd } }))
         await loadRemote(info.sessionId, info.cwd)
@@ -411,6 +431,7 @@ export function App(): ReactElement {
         const site = sites.find((s) => s.id === siteId)
         if (site?.localDir) void loadLocal(site.localDir)
         notify(t('Подключено: {0}', info.name))
+        return info
       } finally {
         setConnectingSiteId(null)
       }
@@ -666,14 +687,19 @@ export function App(): ReactElement {
     resetSyncPreview()
   }, [activeSessionId, local.path, remote.path, resetSyncPreview])
 
-  const syncVersion = async (direction: 'upload' | 'download'): Promise<void> => {
-    if (!activeSessionId || !local.path || !remote.path || syncing) return
+  const syncVersionAt = useCallback(async (
+    direction: 'upload' | 'download',
+    sessionId: string,
+    localRoot: string,
+    remoteRoot: string
+  ): Promise<boolean> => {
+    if (!localRoot || !remoteRoot || syncing) return false
     const toServer = direction === 'upload'
     setSyncing(direction)
     try {
       const result = toServer
-        ? await api.queue.syncToServer(activeSessionId, local.path, remote.path)
-        : await api.queue.syncFromServer(activeSessionId, local.path, remote.path)
+        ? await api.queue.syncToServer(sessionId, localRoot, remoteRoot)
+        : await api.queue.syncFromServer(sessionId, localRoot, remoteRoot)
       notify(
         result.queued > 0
           ? t('В очередь добавлено: {0}; без изменений: {1}; исключено: {2}', result.queued, result.unchanged, result.ignored)
@@ -683,12 +709,20 @@ export function App(): ReactElement {
         refreshLocal()
         refreshRemote()
       }
+      return true
     } catch (err) {
       notify((err as Error).message, 'error')
+      return false
     } finally {
       setSyncing(null)
     }
-  }
+  }, [api, syncing, notify, refreshLocal, refreshRemote])
+
+  const askSyncConfirmation = useCallback(
+    (direction: 'upload' | 'download', localPath: string, remotePath: string): Promise<boolean> =>
+      new Promise((resolve) => setSyncConfirm({ direction, localPath, remotePath, resolve })),
+    []
+  )
 
   const scrollPaneFromBridge = (
     side: 'local' | 'remote',
@@ -711,7 +745,7 @@ export function App(): ReactElement {
     setBridgePosition(Math.max(25, Math.min(75, percent)))
   }
 
-  const toggleSsh = (): void => {
+  const toggleSsh = useCallback((): void => {
     if (!activeSessionId) return
     setSshSessionId((current) => {
       if (current) {
@@ -720,7 +754,7 @@ export function App(): ReactElement {
       }
       return activeSessionId
     })
-  }
+  }, [activeSessionId, api])
 
   const moveRemoteSplit = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (
@@ -854,12 +888,200 @@ export function App(): ReactElement {
     if (!ok) return
     await api.sites.remove(site.id)
     setSites(await api.sites.list())
+    if (lastConnectedSiteId === site.id) {
+      setLastConnectedSiteId(null)
+      setSettings((current) => ({ ...current, lastSiteId: null }))
+    }
   }
 
   const changeSettings = async (patch: Partial<AppSettings>): Promise<void> => {
     setSettings((s) => ({ ...s, ...patch }))
     await api.app.saveSettings(patch)
   }
+
+  const runMacro = useCallback(async (macro: AutomationMacro): Promise<void> => {
+    if (macroRunningRef.current) {
+      notify(t('Дождитесь завершения текущего макроса'), 'error')
+      return
+    }
+    macroRunningRef.current = true
+    const startedMessage = t('Запущен макрос «{0}»', macro.name)
+    notify(startedMessage)
+    await api.app.log(activeSession?.sessionId ?? null, startedMessage).catch(() => undefined)
+    let macroSession = activeSession
+    let automationSessionId: string | null = null
+    let currentStepIndex = -1
+    let currentStepDescription = ''
+    const stopAutomation = async (): Promise<void> => {
+      if (!automationSessionId) return
+      const sessionId = automationSessionId
+      automationSessionId = null
+      await api.ssh.stopAutomation(sessionId).catch(() => undefined)
+    }
+    try {
+      for (const [index, step] of macro.steps.entries()) {
+        currentStepIndex = index
+        currentStepDescription = macroStepDescription(step, sites)
+        const stepMessage = t(
+          'Макрос «{0}»: шаг {1}/{2} — {3}',
+          macro.name,
+          index + 1,
+          macro.steps.length,
+          currentStepDescription
+        )
+        notify(stepMessage)
+        await api.app.log(macroSession?.sessionId ?? null, stepMessage).catch(() => undefined)
+
+        if (step.type === 'connect') {
+          await stopAutomation()
+          const profile = sites.find((site) => site.id === step.siteId)
+          if (!profile) throw new Error(t('Профиль подключения для макроса не найден'))
+          const existing = sessions.find((session) => session.siteId === profile.id)
+          if (existing) {
+            macroSession = existing
+            selectSession(existing.sessionId)
+          } else {
+            if (profile.authMode === 'password' && !profile.hasStoredPassword) {
+              throw new Error(t('Для запуска макроса сохраните пароль профиля «{0}»', profile.name))
+            }
+            macroSession = await openSession(profile.id)
+          }
+          continue
+        }
+
+        if (!macroSession) throw new Error(t('Сначала добавьте в макрос подключение к серверу'))
+        if (step.type === 'disconnect') {
+          await stopAutomation()
+          await api.session.disconnect(macroSession.sessionId)
+          macroSession = null
+          continue
+        }
+        if (step.type === 'command') {
+          if (automationSessionId !== macroSession.sessionId) {
+            await stopAutomation()
+            // Match a normal SSH console: begin in the account's home folder.
+            // Subsequent commands share this shell, so an explicit `cd` step
+            // changes the directory for every command that follows it.
+            await api.ssh.startAutomation(macroSession.sessionId, '')
+            automationSessionId = macroSession.sessionId
+          }
+          const output = await api.ssh.exec(macroSession.sessionId, step.command)
+          const summary = output.trim()
+          if (summary) notify(summary.length > 300 ? `${summary.slice(0, 300)}…` : summary)
+          continue
+        }
+
+        const direction = step.type === 'syncToServer' ? 'upload' : 'download'
+        const profile = sites.find((site) => site.id === macroSession?.siteId)
+        const localRoot = profile?.localDir?.trim() || local.path
+        const remoteRoot = profile?.remoteDir?.trim() || macroSession.cwd
+        const confirmed = await askSyncConfirmation(direction, localRoot, remoteRoot)
+        if (!confirmed) throw new Error(t('Макрос отменён пользователем'))
+        const since = Date.now() - 1
+        const started = await syncVersionAt(
+          direction,
+          macroSession.sessionId,
+          localRoot,
+          remoteRoot
+        )
+        if (!started) throw new Error(t('Не удалось запустить передачу из макроса'))
+        await api.queue.waitIdle(macroSession.sessionId, since)
+      }
+      const completedMessage = t('Макрос «{0}» завершён', macro.name)
+      notify(completedMessage)
+      await api.app.log(macroSession?.sessionId ?? null, completedMessage).catch(() => undefined)
+    } catch (error) {
+      const message = (error as Error).message
+      if (message !== t('Макрос отменён пользователем')) {
+        const failureMessage = currentStepIndex >= 0
+          ? t(
+              'Макрос «{0}»: ошибка на шаге {1}/{2} — {3}: {4}',
+              macro.name,
+              currentStepIndex + 1,
+              macro.steps.length,
+              currentStepDescription,
+              message
+            )
+          : t('Макрос «{0}» остановлен: {1}', macro.name, message)
+        notify(failureMessage, 'error')
+        await api.app.log(
+          macroSession?.sessionId ?? null,
+          failureMessage
+        ).catch(() => undefined)
+      }
+    } finally {
+      await stopAutomation()
+      macroRunningRef.current = false
+    }
+  }, [activeSession, api, askSyncConfirmation, local.path, notify, openSession, selectSession, sessions, sites, syncVersionAt])
+
+  const announceHotkey = useCallback((hotkey: string, label: string): void => {
+    const message = t('Хоткей {0}: {1}', formatHotkey(hotkey), label)
+    notify(message)
+    void api.app.log(activeSessionId, message).catch(() => undefined)
+  }, [activeSessionId, api, notify])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.repeat || document.querySelector('[role="dialog"]')) return
+      if (event.key === 'F5') {
+        event.preventDefault()
+        refreshLocal()
+        refreshRemote()
+        return
+      }
+      const consume = (): void => {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      if (eventMatchesHotkey(event, settings.hotkeys.connectLast)) {
+        consume()
+        announceHotkey(settings.hotkeys.connectLast, hotkeyActionLabel('connectLast'))
+        const site = sites.find((item) => item.id === lastConnectedSiteId)
+        if (!site) return notify(t('Последнее подключение не найдено'), 'error')
+        const existing = sessions.find((session) => session.siteId === site.id)
+        if (existing) selectSession(existing.sessionId)
+        else void connect(site)
+        return
+      }
+      if (eventMatchesHotkey(event, settings.hotkeys.toggleSsh)) {
+        consume()
+        announceHotkey(settings.hotkeys.toggleSsh, hotkeyActionLabel('toggleSsh'))
+        if (activeSessionId) toggleSsh()
+        else notify(t('Нет активного подключения'), 'error')
+        return
+      }
+      if (eventMatchesHotkey(event, settings.hotkeys.syncToServer)) {
+        consume()
+        announceHotkey(settings.hotkeys.syncToServer, hotkeyActionLabel('syncToServer'))
+        if (activeSessionId) setSyncConfirm({ direction: 'upload', localPath: local.path, remotePath: remote.path })
+        else notify(t('Нет активного подключения'), 'error')
+        return
+      }
+      if (eventMatchesHotkey(event, settings.hotkeys.syncFromServer)) {
+        consume()
+        announceHotkey(settings.hotkeys.syncFromServer, hotkeyActionLabel('syncFromServer'))
+        if (activeSessionId) setSyncConfirm({ direction: 'download', localPath: local.path, remotePath: remote.path })
+        else notify(t('Нет активного подключения'), 'error')
+        return
+      }
+      if (eventMatchesHotkey(event, settings.hotkeys.disconnect)) {
+        consume()
+        announceHotkey(settings.hotkeys.disconnect, hotkeyActionLabel('disconnect'))
+        if (activeSessionId) void disconnect(activeSessionId)
+        else notify(t('Нет активного подключения'), 'error')
+        return
+      }
+      const macro = settings.macros.find((item) => eventMatchesHotkey(event, item.hotkey))
+      if (macro) {
+        consume()
+        announceHotkey(macro.hotkey, t('Макрос «{0}»', macro.name))
+        void runMacro(macro)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [activeSessionId, announceHotkey, connect, disconnect, lastConnectedSiteId, local.path, refreshLocal, refreshRemote, remote.path, runMacro, selectSession, sessions, settings.hotkeys, settings.macros, sites, toggleSsh])
 
   /* ------------------------------------------------------------------ drag/drop */
 
@@ -946,7 +1168,7 @@ export function App(): ReactElement {
       <header className="titlebar">
         <span className="titlebar__brand">
           <span className="titlebar__mark">K</span>
-          KreOsFTP
+          <span className="titlebar__name">KreOsFTP</span>
         </span>
         <button
           className="btn btn--ghost btn--icon"
@@ -986,7 +1208,7 @@ export function App(): ReactElement {
                   e.stopPropagation()
                   void disconnect(session.sessionId)
                 }}
-                title={t('Отключиться')}
+                data-tooltip={tooltipWithHotkey(t('Отключиться'), settings.hotkeys.disconnect)}
               >
                 <IconX size={11} />
               </button>
@@ -1012,12 +1234,12 @@ export function App(): ReactElement {
               }}
             >
               <span className="session-tab__dot" />
-              <span className="session-tab__label">{lastClosed?.name}</span>
+              <span className="session-tab__label">{ghostTab.name}</span>
               <button
                 className="session-tab__close"
                 onClick={(e) => {
                   e.stopPropagation()
-                  setLastClosed(null)
+                  setLastConnectionHidden(true)
                   setClosedTooltip(null)
                 }}
                 title={t('Убрать из панели')}
@@ -1071,7 +1293,12 @@ export function App(): ReactElement {
           title={ghostTab.name}
           endpoint={`${ghostTab.user ? `${ghostTab.user}@` : ''}${ghostTab.host}:${ghostTab.port}`}
           protocol={ghostTab.protocol.toUpperCase()}
-          note={t('Не подключено — нажмите, чтобы подключиться')}
+          note={
+            t('Не подключено — нажмите, чтобы подключиться') +
+            (settings.hotkeys.connectLast
+              ? ` · ${formatHotkey(settings.hotkeys.connectLast)}`
+              : '')
+          }
           onClose={() => setClosedTooltip(null)}
         />
       )}
@@ -1107,7 +1334,7 @@ export function App(): ReactElement {
             className="panes"
             ref={panesRef}
             style={{
-              gridTemplateColumns: `minmax(260px, ${bridgePosition}fr) 72px minmax(260px, ${100 - bridgePosition}fr)`
+              gridTemplateColumns: `minmax(0, ${bridgePosition}fr) var(--bridge-width, 72px) minmax(0, ${100 - bridgePosition}fr)`
             }}
           >
             <div className="pane-wrap">
@@ -1152,6 +1379,17 @@ export function App(): ReactElement {
                       title={t('Открыть в проводнике')}
                     >
                       <IconExternal size={13} />
+                    </button>
+                    <button
+                      className="btn btn--ghost btn--icon"
+                      onClick={() =>
+                        void api.local
+                          .openTerminal(local.path)
+                          .catch((err: Error) => notify(err.message, 'error'))
+                      }
+                      title={t('Открыть папку в CMD/терминале')}
+                    >
+                      <IconTerminal size={13} />
                     </button>
                     <button
                       className="btn btn--ghost"
@@ -1212,14 +1450,17 @@ export function App(): ReactElement {
                 onBlur={hideSyncPreview}
                 onClick={() => {
                   resetSyncPreview()
-                  setSyncConfirm('upload')
+                  setSyncConfirm({ direction: 'upload', localPath: local.path, remotePath: remote.path })
                 }}
                 disabled={
                   !connected ||
                   syncing !== null ||
                   transfers.some((item) => item.status === 'active' || item.status === 'pending')
                 }
-                data-tooltip={t('Обновить сервер с учетом .ftpignore')}
+                data-tooltip={tooltipWithHotkey(
+                  t('Обновить сервер с учетом .ftpignore'),
+                  settings.hotkeys.syncToServer
+                )}
                 aria-label={t('Обновить сервер с учетом .ftpignore')}
               >
                 <IconSyncUp size={17} />
@@ -1228,7 +1469,10 @@ export function App(): ReactElement {
                 className="bridge__remote bridge__remote--ssh"
                 onClick={toggleSsh}
                 disabled={!connected}
-                data-tooltip={t('Открыть SSH-терминал внутри серверной панели')}
+                data-tooltip={tooltipWithHotkey(
+                  t('Открыть SSH-терминал внутри серверной панели'),
+                  settings.hotkeys.toggleSsh
+                )}
                 aria-label={t('Открыть SSH-терминал')}
               >
                 <IconTerminal size={13} /> SSH
@@ -1247,14 +1491,17 @@ export function App(): ReactElement {
                 onBlur={hideSyncPreview}
                 onClick={() => {
                   resetSyncPreview()
-                  setSyncConfirm('download')
+                  setSyncConfirm({ direction: 'download', localPath: local.path, remotePath: remote.path })
                 }}
                 disabled={
                   !connected ||
                   syncing !== null ||
                   transfers.some((item) => item.status === 'active' || item.status === 'pending')
                 }
-                data-tooltip={t('Обновить локально с учетом .ftpignore')}
+                data-tooltip={tooltipWithHotkey(
+                  t('Обновить локально с учетом .ftpignore'),
+                  settings.hotkeys.syncFromServer
+                )}
                 aria-label={t('Обновить локально с учетом .ftpignore')}
               >
                 <IconSyncDown size={17} />
@@ -1277,7 +1524,7 @@ export function App(): ReactElement {
               style={
                 sshSessionId === activeSessionId
                   ? {
-                      gridTemplateRows: `minmax(150px, ${remoteExplorerShare}fr) 8px minmax(130px, ${100 - remoteExplorerShare}fr)`
+                      gridTemplateRows: `minmax(70px, ${remoteExplorerShare}fr) 8px minmax(70px, ${100 - remoteExplorerShare}fr)`
                     }
                   : undefined
               }
@@ -1328,7 +1575,10 @@ export function App(): ReactElement {
                     <button
                       className="btn btn--ghost"
                       onClick={() => void disconnect(activeSession.sessionId)}
-                      title={t('Закрыть соединение')}
+                      data-tooltip={tooltipWithHotkey(
+                        t('Закрыть соединение'),
+                        settings.hotkeys.disconnect
+                      )}
                     >
                       
                       {t('Отключиться')}
@@ -1428,6 +1678,7 @@ export function App(): ReactElement {
                       )
                     }}
                     onClose={() => setSshSessionId(null)}
+                    toggleHotkey={settings.hotkeys.toggleSsh}
                   />
                 </>
               )}
@@ -1462,22 +1713,38 @@ export function App(): ReactElement {
       {settingsOpen && (
         <SettingsDialog
           settings={settings}
+          sites={sites}
           encryptionAvailable={encryptionAvailable}
           onChange={(patch) => void changeSettings(patch)}
+          onRunMacro={(macro) => {
+            setSettingsOpen(false)
+            void runMacro(macro)
+          }}
           onClose={() => setSettingsOpen(false)}
         />
       )}
 
       {syncConfirm && (
         <SyncConfirmDialog
-          direction={syncConfirm}
-          localPath={local.path}
-          remotePath={remote.path}
-          onCancel={() => setSyncConfirm(null)}
-          onConfirm={() => {
-            const direction = syncConfirm
+          direction={syncConfirm.direction}
+          localPath={syncConfirm.localPath}
+          remotePath={syncConfirm.remotePath}
+          onCancel={() => {
+            syncConfirm.resolve?.(false)
             setSyncConfirm(null)
-            void syncVersion(direction)
+          }}
+          onConfirm={() => {
+            const request = syncConfirm
+            setSyncConfirm(null)
+            if (request.resolve) request.resolve(true)
+            else if (activeSessionId) {
+              void syncVersionAt(
+                request.direction,
+                activeSessionId,
+                request.localPath,
+                request.remotePath
+              )
+            }
           }}
         />
       )}

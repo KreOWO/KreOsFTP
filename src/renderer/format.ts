@@ -3,12 +3,31 @@ import { t } from '../shared/i18n'
 const units = (): string[] => [t('Б'), t('КБ'), t('МБ'), t('ГБ'), t('ТБ')]
 
 export function formatSize(bytes: number | null | undefined): string {
+  return formatSizeAt(bytes, 0)
+}
+
+/** Сколько ступеней можно спуститься от самой крупной единицы до байтов. */
+export const MAX_SIZE_DETAIL = 4
+
+/**
+ * Размер с заданной степенью подробности.
+ *
+ * Уровень 0 — самая компактная запись (`1.1 МБ`). Каждая следующая ступень
+ * опускается на единицу вниз и добавляет знак после запятой: `1126.4 КБ`,
+ * затем `1153433 Б`. Это позволяет столбцу использовать освободившееся место
+ * для точности, вместо того чтобы оставлять его пустым.
+ */
+export function formatSizeAt(bytes: number | null | undefined, level: number): string {
   if (bytes === null || bytes === undefined || bytes < 0) return '—'
   if (bytes === 0) return t('0 Б')
-  const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units().length - 1)
+  const names = units()
+  const natural = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), names.length - 1)
+  const exp = Math.max(0, natural - Math.max(0, level))
   const value = bytes / 1024 ** exp
-  const digits = exp === 0 ? 0 : value < 10 ? 1 : 0
-  return `${value.toFixed(digits)} ${units()[exp]}`
+  // Байты дробными не бывают. На спуске десятая доля — смысл затеи, но у
+  // многозначного числа она уже ничего не сообщает: 2343750.0 КБ шумит.
+  const digits = exp === 0 ? 0 : level > 0 ? (value < 10_000 ? 1 : 0) : value < 10 ? 1 : 0
+  return `${value.toFixed(digits)} ${names[exp]}`
 }
 
 export function formatSpeed(bytesPerSecond: number): string {
