@@ -2,10 +2,11 @@
 
 # KreOsFTP
 
-**A two-pane FTP / FTPS / SFTP client with an SSH terminal in the same window.**
+**Files, SSH and automation in one window.**
 
-Stop alternating between a file transfer app and a separate terminal.
-Move files on the left, run commands on the right, in one place.
+Work with local and remote files side by side, open SSH next to the server pane,
+and turn repeated deployment routines into macros. One shortcut can connect,
+sync files, run server commands and disconnect when everything is done.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3d7dd6.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-6c7a89.svg)](#install)
@@ -14,13 +15,32 @@ Move files on the left, run commands on the right, in one place.
 
 English · [Русский](README.ru.md)
 
-<img src="docs/screenshot-main.png" alt="KreOsFTP main window" width="900">
+<img src="docs/screenshots/04-ssh.png" alt="KreOsFTP with a connected server and SSH terminal" width="900">
 
-<sub>Two panes, a queue mid-transfer, and the SSH panel one click away.</sub>
+<sub>Local files, the server and a full SSH terminal stay in view.</sub>
 
 </div>
 
 ---
+
+## One shortcut for the whole routine
+
+A typical deployment repeats the same steps: connect, send changed files, run a
+restart command and close the connection. KreOsFTP lets you save that sequence
+as a macro and bind it to any available shortcut.
+
+For example, one macro can:
+
+1. connect to the selected server;
+2. update it while respecting `.ftpignore`;
+3. run `docker compose up -d` or another SSH command;
+4. disconnect after every previous step succeeds.
+
+Steps run strictly in order. File transfers finish before the next command,
+while every stage appears in notifications and the log. The routine becomes a
+single shortcut without becoming a black box.
+
+<img src="docs/screenshots/07-4-settings-macros.png" alt="A deployment macro with connect, sync, SSH command and disconnect steps" width="900">
 
 ## Why this exists
 
@@ -129,21 +149,33 @@ so a rule that is too broad is visible rather than silent.
 
 ---
 
-## More screenshots
+## Screenshots
 
 <table>
 <tr>
-<td>
-<img src="docs/screenshot-conflict.png" alt="Name conflict dialog" width="100%"><br>
-<b>Name conflicts.</b> Size and date of both sides, so the choice is informed.
-“Resume” greys out when the sizes already match.
-</td>
+<td width="50%"><img src="docs/screenshots/01-start.png" alt="Empty start screen" width="100%"><br><b>Clean start.</b> Work locally or add the first server.</td>
+<td width="50%"><img src="docs/screenshots/02-add-server.png" alt="Add connection dialog" width="100%"><br><b>New connection.</b> FTP, FTPS and SFTP with a separate SSH port.</td>
 </tr>
 <tr>
-<td>
-<img src="docs/screenshot-light.png" alt="Light theme" width="100%"><br>
-<b>Light theme.</b> Both themes are first-class; the default follows the system.
-</td>
+<td width="50%"><img src="docs/screenshots/03-connected.png" alt="Local and server file panes" width="100%"><br><b>Two file panes.</b> Local and remote directories stay visible together.</td>
+<td width="50%"><img src="docs/screenshots/04-ssh.png" alt="Built-in SSH terminal" width="100%"><br><b>SSH beside the files.</b> The terminal opens inside the server pane.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/05-ftpignore-preview.png" alt="ftpignore sync preview" width="100%"><br><b><code>.ftpignore</code> preview.</b> Confirmed changes turn green; excluded entries remain untouched.</td>
+<td width="50%"><img src="docs/screenshots/06-active-transfer.png" alt="Active file transfer" width="100%"><br><b>Transfer in progress.</b> Progress, speed and remaining data at a glance.</td>
+</tr>
+</table>
+
+### Settings
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/07-1-settings-general.png" alt="General settings" width="100%"><br><b>General</b> — language, theme and hidden files.</td>
+<td width="50%"><img src="docs/screenshots/07-2-settings-transfers.png" alt="Transfer settings" width="100%"><br><b>Transfers</b> — conflicts, concurrency and confirmations.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/07-3-settings-hotkeys.png" alt="Shortcut settings" width="100%"><br><b>Shortcuts</b> — the main application actions.</td>
+<td width="50%"><img src="docs/screenshots/07-4-settings-macros.png" alt="Macro editor" width="100%"><br><b>Macros</b> — ordered routines triggered by one shortcut.</td>
 </tr>
 </table>
 
